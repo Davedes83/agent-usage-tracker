@@ -1,4 +1,13 @@
-<img width="500" alt="Agent Usage Tracker panel" src="preview.png" />
+<table>
+  <tr>
+    <td align="center"><b>Today</b><br><img width="360" alt="Agent Usage Tracker — today" src="preview-today.png"></td>
+    <td align="center"><b>Last 7 days</b><br><img width="360" alt="Agent Usage Tracker — last 7 days" src="preview-week.png"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Last 30 days</b><br><img width="360" alt="Agent Usage Tracker — last 30 days" src="preview-month.png"></td>
+    <td align="center"><b>Lifetime</b><br><img width="360" alt="Agent Usage Tracker — lifetime" src="preview-all.png"></td>
+  </tr>
+</table>
 
 # Agent Usage Tracker
 
