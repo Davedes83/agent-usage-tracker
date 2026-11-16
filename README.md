@@ -1,3 +1,5 @@
+<img width="500" alt="Agent Usage Tracker panel" src="preview.png" />
+
 # Agent Usage Tracker
 
 A premium bar panel for [Omarchy](https://omarchy.org/) that shows token usage
