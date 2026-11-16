@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "davedes.agent-usage-tracker",
+  "name": "Agent Usage Tracker",
+  "version": "1.2.0",
+  "author": "davedes",
+  "license": "MIT",
+  "description": "Token usage and spend across OpenCode providers and the OpenRouter account, in one premium bar panel: today/week/month/lifetime windows, per-provider and per-model breakdowns, recent sessions, and live OpenRouter credits.",
+  "homepage": "https://github.com/Davedes83/agent-usage-tracker",
+  "repository": "https://github.com/Davedes83/agent-usage-tracker",
+  "keywords": ["omarchy", "opencode", "openrouter", "usage", "tokens", "cost", "bar-widget"],
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Agent Usage Tracker",
+    "description": "Token usage and spend across OpenCode and OpenRouter",
+    "category": "AI",
+    "aliases": ["usage", "tokens", "spend", "agent-usage"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 30
+    }
+  }
+}
