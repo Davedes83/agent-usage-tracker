@@ -1,10 +1,10 @@
 | Today | Last 7 days |
 | :---: | :---: |
-| ![Today](preview-today.png) | ![Last 7 days](preview-week.png) |
+| ![Today](screenshot-today.png) | ![Last 7 days](screenshot-week.png) |
 
 | Last 30 days | Lifetime |
 | :---: | :---: |
-| ![Last 30 days](preview-month.png) | ![Lifetime](preview-all.png) |
+| ![Last 30 days](screenshot-month.png) | ![Lifetime](screenshot-all.png) |
 
 # Agent Usage Tracker
 
