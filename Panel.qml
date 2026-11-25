@@ -61,7 +61,8 @@ Panel {
   readonly property real cardRadius: Math.max(8, Style.cornerRadius)
 
   // Short logo-ish badge for a provider row: two letters at most, so the row
-  // reads at a glance without a full logo asset.
+  // reads at a glance without a full logo asset. Covers the providers seen in
+  // practice; anything else falls back to its first letter.
   function providerBadge(name) {
     var n = String(name || "").toLowerCase()
     if (n.indexOf("google") === 0) return "G"
@@ -72,6 +73,20 @@ Panel {
     if (n.indexOf("openai") === 0) return "AI"
     if (n.indexOf("anthropic") === 0) return "A"
     if (n.indexOf("deepseek") === 0) return "D"
+    if (n.indexOf("github") === 0 || n.indexOf("copilot") === 0) return "GH"
+    if (n.indexOf("mistral") === 0) return "M"
+    if (n.indexOf("cohere") === 0) return "CO"
+    if (n.indexOf("xai") === 0 || n.indexOf("grok") === 0) return "X"
+    if (n.indexOf("meta") === 0 || n.indexOf("llama") === 0) return "L"
+    if (n.indexOf("qwen") === 0 || n.indexOf("alibaba") === 0) return "QW"
+    if (n.indexOf("tencent") === 0) return "T"
+    if (n.indexOf("z-ai") === 0 || n.indexOf("zhipu") === 0 || n.indexOf("glm") === 0) return "Z"
+    if (n.indexOf("baidu") === 0 || n.indexOf("ernie") === 0) return "B"
+    if (n.indexOf("nvidia") === 0) return "NV"
+    if (n.indexOf("stealth") === 0) return "S"
+    if (n.indexOf("particle") === 0) return "P"
+    if (n.indexOf("poolside") === 0) return "PS"
+    if (n.indexOf("zenprobe") === 0) return "ZP"
     return (n.charAt(0) || "?").toUpperCase()
   }
 
@@ -133,8 +148,10 @@ Panel {
     return total
   }
 
+  // Share bars always use processed tokens (in + out), not cost: a window
+  // can mix free and paid providers, and a cost basis would make every free
+  // row read 0% next to a paid one. Token share is comparable across all rows.
   function rowShare(row) {
-    if (providerTotalCost > 0) return Model.pct(n(row.cost), providerTotalCost)
     return Model.pct(n(row.input) + n(row.output), providerTotalTokens)
   }
 
@@ -159,8 +176,11 @@ Panel {
 
   readonly property real orRemaining: Math.max(0, n(or.credits_total) - n(or.credits_used))
   readonly property real orBudget: n(or.budget_limit)
-  readonly property bool orLow: n(or.credits_total) > 0
-    && orRemaining / n(or.credits_total) < 0.15
+  // Low when credits are nearly gone OR the free-model daily allowance is
+  // exhausted (free requests can run dry while credits are still fine).
+  readonly property bool orLow: (n(or.credits_total) > 0
+    && orRemaining / n(or.credits_total) < 0.15)
+    || (n(or.free_limit) > 0 && n(or.free_used) >= n(or.free_limit))
 
   // ---- shared bits
 
@@ -558,7 +578,7 @@ Panel {
           anchors.verticalCenter: parent.verticalCenter
           text: (rrow.rowData.provider || "Unknown")
             + ((rrow.rowData.model && rrow.rowData.model !== "") ? "  ·  " + Model.shortModel(rrow.rowData.model) : "")
-            + "  ·  " + Model.fmtTokens(root.n(rrow.rowData.input) + root.n(rrow.rowData.output)) + " tok"
+            + "  ·  " + Model.fmtTokens(root.n(rrow.rowData.input) + root.n(rrow.rowData.output) + root.n(rrow.rowData.reasoning)) + " tok"
           textFormat: Text.PlainText
           wrapMode: Text.Wrap
           color: root.textDim2
@@ -754,6 +774,27 @@ Panel {
             width: parent.width
             spacing: Style.spacing.lg
 
+            // ---- Loading skeleton while the first poll is in flight
+            Column {
+              width: parent.width
+              spacing: Style.spacing.sm
+              visible: !root.hasData && root.hostProblem === ""
+
+              Repeater {
+                model: 3
+                Rectangle {
+                  width: parent.width
+                  height: Style.space(34)
+                  radius: root.cardRadius
+                  color: root.cardFill
+                  opacity: 0.6
+                  Behavior on opacity {
+                    NumberAnimation { duration: 900; from: 0.3; to: 0.7; loops: Animation.Infinite }
+                  }
+                }
+              }
+            }
+
             Item {
               width: parent.width
               height: Math.max(chipsRow.implicitHeight, lifetimeText.implicitHeight)
@@ -766,10 +807,10 @@ Panel {
 
                 Repeater {
                   model: [
-                    { caption: "Today", key: "today" },
-                    { caption: "7 days", key: "week" },
-                    { caption: "30 days", key: "month" },
-                    { caption: "All", key: "all" }
+                    { caption: "1 Today", key: "today" },
+                    { caption: "2 7 days", key: "week" },
+                    { caption: "3 30 days", key: "month" },
+                    { caption: "4 All", key: "all" }
                   ]
                   delegate: WindowChip {
                     required property var modelData
@@ -814,7 +855,9 @@ Panel {
                 width: Math.max(0, (parent.width - Style.spacing.sm * 2) / 3)
                 caption: "SESSIONS"
                 value: root.hasData ? Model.fmtInt(root.wSessions) : "—"
-                sub: root.hasData && root.providerRows.length > 0 ? root.providerRows.length + " providers" : ""
+                sub: root.hasData
+                  ? (root.providerRows.length > 0 ? root.providerRows.length + " active" : "")
+                  : ""
               }
             }
           }

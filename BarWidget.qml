@@ -140,7 +140,13 @@ BarWidget {
   onSettingsChanged: injectPanel()
   onStatsChanged: injectPanel()
   // Only refresh when the panel *closes* after being opened with stale data
-  onOpenedChanged: { if (!opened && ready) refresh() }
+  // Refresh when the panel closes, but only if the data is actually stale:
+  // a manual R or the 30 s timer may have just refreshed, and re-running the
+  // collector on every close is wasteful.
+  onOpenedChanged: {
+    if (!opened && ready && (Date.now() - lastUpdated) > refreshIntervalSec * 1000)
+      refresh()
+  }
 
   Component.onCompleted: refresh()
 
@@ -218,6 +224,8 @@ BarWidget {
   }
 
   Component.onDestruction: {
-    if (collectProc.running) collectProc.kill()
+    // Setting running = false stops the process; Quickshell's Process has no
+    // kill()/terminate() method (calling one logs a TypeError on every reload).
+    if (collectProc.running) collectProc.running = false
   }
 }

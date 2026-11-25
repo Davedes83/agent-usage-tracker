@@ -6,6 +6,9 @@ and provider that actually served it) and the OpenRouter account/key usage, and
 emits one JSON document on stdout for the Omarchy bar widget. Read-only: never
 writes to the OpenCode database.
 
+Windows: "today" is local calendar midnight-to-now; "week" and "month" are
+rolling 7- and 30-day windows ending now; "all" is the full history.
+
 Output shape (as consumed by Model.js / Panel.qml):
 {
   "generated_at": <int ms>,
@@ -176,8 +179,10 @@ def load_messages(sessions):
     V2's session_message is read first, then the original message store,
     deduplicated by message id, so a migrated reply is counted once. A fork's
     copies of its source session's replies are skipped: they were spent in the
-    source, not in the copy. Returns [] when the stores cannot be read, and the
-    caller falls back to the session rows.
+    source, not in the copy. Each store is read independently and whatever
+    could be read is merged, so a failure in one store (a missing table, a
+    corrupt page) degrades to the other's rows instead of dropping per-model
+    attribution entirely. Returns [] only when neither store yields a row.
     """
     if not os.path.exists(OC_DB):
         return []
@@ -190,22 +195,6 @@ def load_messages(sessions):
     # The session row's model is one value for a whole session, so it is only a
     # fallback for replies that name no model of their own.
     fallback = {s["id"]: (s["provider"], s["model"]) for s in sessions}
-    # A fork copies its source's messages under new ids, each keeping its
-    # original time; only the rows at or after the fork are its own. Applying
-    # that to every session would drop old replies whose session row was
-    # created later than the messages it holds, so it is keyed on forks alone.
-    forked_at = {}
-    try:
-        conn.execute("PRAGMA query_only = ON")
-        conn.execute("PRAGMA busy_timeout = 3000")
-        conn.row_factory = sqlite3.Row
-        for r in conn.execute(
-            "SELECT id, time_created, fork_session_id FROM session_v2"
-        ):
-            if r["fork_session_id"]:
-                forked_at[r["id"]] = int(r["time_created"] or 0)
-    except sqlite3.Error:
-        pass
 
     rows = []
     seen = set()
@@ -254,37 +243,59 @@ def load_messages(sessions):
     """
 
     try:
-        for r in conn.execute(
-            """
-            SELECT id, session_id, time_created,
-                   """ + fields + """
-                   json_extract(data, '$.model.providerID') AS provider,
-                   json_extract(data, '$.model.id') AS model
-            FROM session_message
-            WHERE type IN ('assistant', 'compaction') AND json_valid(data)
-            """
-        ):
-            before = forked_at.get(r["session_id"], 0)
-            if before and int(r["time_created"] or 0) < before:
-                continue
-            take(r, 0)
-    except sqlite3.Error:
-        pass
+        # Read-only, and wait out a concurrent writer instead of bailing with
+        # SQLITE_BUSY the moment OpenCode saves a message.
+        conn.execute("PRAGMA query_only = ON")
+        conn.execute("PRAGMA busy_timeout = 3000")
+        conn.row_factory = sqlite3.Row
 
-    try:
-        for r in conn.execute(
-            """
-            SELECT id, session_id, time_created,
-                   """ + fields + """
-                   json_extract(data, '$.providerID') AS provider,
-                   json_extract(data, '$.modelID') AS model
-            FROM message
-            WHERE json_valid(data) AND json_extract(data, '$.role') = 'assistant'
-            """
-        ):
-            take(r, forked_at.get(r["session_id"], 0))
-    except sqlite3.Error:
-        pass
+        # A fork copies its source's messages under new ids, each keeping its
+        # original time; only the rows at or after the fork are its own.
+        # Applying that to every session would drop old replies whose session
+        # row was created later than the messages it holds, so it is keyed on
+        # forks alone. Read in the same pass as the v2 rows below.
+        forked_at = {}
+        try:
+            for r in conn.execute(
+                "SELECT id, time_created, fork_session_id FROM session_v2"
+            ):
+                if r["fork_session_id"]:
+                    forked_at[r["id"]] = int(r["time_created"] or 0)
+        except sqlite3.Error:
+            pass
+
+        try:
+            for r in conn.execute(
+                """
+                SELECT id, session_id, time_created,
+                       """ + fields + """
+                       json_extract(data, '$.model.providerID') AS provider,
+                       json_extract(data, '$.model.id') AS model
+                FROM session_message
+                WHERE type IN ('assistant', 'compaction') AND json_valid(data)
+                """
+            ):
+                before = forked_at.get(r["session_id"], 0)
+                if before and int(r["time_created"] or 0) < before:
+                    continue
+                take(r, 0)
+        except sqlite3.Error:
+            pass
+
+        try:
+            for r in conn.execute(
+                """
+                SELECT id, session_id, time_created,
+                       """ + fields + """
+                       json_extract(data, '$.providerID') AS provider,
+                       json_extract(data, '$.modelID') AS model
+                FROM message
+                WHERE json_valid(data) AND json_extract(data, '$.role') = 'assistant'
+                """
+            ):
+                take(r, forked_at.get(r["session_id"], 0))
+        except sqlite3.Error:
+            pass
     finally:
         conn.close()
 
@@ -424,6 +435,7 @@ def aggregate(sessions, messages):
                 "cost": 0.0,
                 "input": 0,
                 "output": 0,
+                "reasoning": 0,
                 "ts": 0,
                 "model": m["model"],
                 "provider": m["provider"],
@@ -431,6 +443,7 @@ def aggregate(sessions, messages):
         acc["cost"] += m["cost"]
         acc["input"] += m["input"]
         acc["output"] += m["output"]
+        acc["reasoning"] += m["reasoning"]
         if m["ts"] > acc["ts"]:
             acc["ts"] = m["ts"]
             # The model that served the latest reply is the session's model.
@@ -457,6 +470,7 @@ def aggregate(sessions, messages):
                 "cost": round(acc["cost"], 6),
                 "input": acc["input"],
                 "output": acc["output"],
+                "reasoning": acc["reasoning"],
                 "updated": acc["ts"] or meta.get("updated") or meta.get("created"),
             }
         )
@@ -478,11 +492,15 @@ def _http_get(url, headers, timeout=8, max_retries=2):
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.load(resp)
         except urllib.error.HTTPError as e:
+            # 429 is the only rate-limit signal worth retrying; other 4xx/5xx
+            # are terminal for this key/endpoint.
             if e.code == 429 and attempt < max_retries:
                 time.sleep(2 ** attempt)  # backoff
                 continue
             raise
-        except Exception:
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+            # Network blip or a non-JSON body (proxy/captive portal): retry,
+            # then give up and let the caller record the error.
             if attempt < max_retries:
                 time.sleep(1)
                 continue
@@ -509,15 +527,17 @@ def fetch_openrouter():
     }
 
     # Serve from cache when fresh; the bar polls far more often than the
-    # account changes, and OpenRouter rate-limits by key.
+    # account changes, and OpenRouter rate-limits by key. Only a *complete*
+    # payload is cached (see below), so a hit always has both key and credits.
     try:
         with open(OR_CACHE, "r", encoding="utf-8") as fh:
             cached = json.load(fh)
         if time.time() - float(cached.get("ts", 0)) < OR_TTL:
             data = cached.get("data") or {}
-            data["ok"] = True
-            data["error"] = None
-            return data
+            if cached.get("complete") and data.get("credits_total"):
+                data["ok"] = True
+                data["error"] = None
+                return data
     except (OSError, ValueError):
         pass
 
@@ -563,23 +583,28 @@ def fetch_openrouter():
         result["error"] = str(exc)
         return result
 
+    credits_ok = False
     try:
         credits = _http_get("https://openrouter.ai/api/v1/credits", headers)
         if credits:
             cdata = credits.get("data", {})
             result["credits_total"] = float(cdata.get("total_credits") or 0.0)
             result["credits_used"] = float(cdata.get("total_usage") or 0.0)
+            credits_ok = result["credits_total"] > 0.0
     except Exception:
         pass
 
-    try:
-        os.makedirs(os.path.dirname(OR_CACHE), exist_ok=True)
-        tmp = OR_CACHE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"ts": time.time(), "data": result}, fh)
-        os.replace(tmp, OR_CACHE)
-    except OSError:
-        pass
+    # Only a fully-resolved payload (key + credits) is worth caching: caching
+    # a half-failed run would serve ok=True with zero credits for the TTL.
+    if credits_ok:
+        try:
+            os.makedirs(os.path.dirname(OR_CACHE), exist_ok=True)
+            tmp = OR_CACHE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"ts": time.time(), "complete": True, "data": result}, fh)
+            os.replace(tmp, OR_CACHE)
+        except OSError:
+            pass
 
     return result
 
