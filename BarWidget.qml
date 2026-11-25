@@ -79,7 +79,12 @@ BarWidget {
   function applyStats(raw) {
     var text = String(raw || "").trim()
     busy = false
-    if (text === "") return
+    if (text === "") {
+      // Empty stdout is a failure, not "no data yet": say so instead of
+      // leaving the last good numbers (or a blank panel) with no explanation.
+      problem = "Collector returned no data"
+      return
+    }
     var parsed
     try {
       parsed = JSON.parse(text)

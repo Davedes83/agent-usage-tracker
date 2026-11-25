@@ -122,6 +122,10 @@ def load_sessions():
 
     rows = []
     try:
+        # Read-only, and wait out a concurrent writer instead of bailing with
+        # SQLITE_BUSY the moment OpenCode saves a message.
+        conn.execute("PRAGMA query_only = ON")
+        conn.execute("PRAGMA busy_timeout = 3000")
         conn.row_factory = sqlite3.Row
         cur = conn.execute(
             """
@@ -192,6 +196,8 @@ def load_messages(sessions):
     # created later than the messages it holds, so it is keyed on forks alone.
     forked_at = {}
     try:
+        conn.execute("PRAGMA query_only = ON")
+        conn.execute("PRAGMA busy_timeout = 3000")
         conn.row_factory = sqlite3.Row
         for r in conn.execute(
             "SELECT id, time_created, fork_session_id FROM session_v2"
@@ -405,24 +411,55 @@ def aggregate(sessions, messages):
             row["cost"] = round(row["cost"], 6)
         models_per_window_out[key] = rows
 
+    # Recent sessions are built from the attributed replies, not the session
+    # rows: a session's row cost/model can lag the messages that actually
+    # spent the money, and the recent list must agree with the window totals.
+    recent_by_session = {}
+    for m in messages:
+        if m["session"] in child_sessions:
+            continue
+        acc = recent_by_session.get(m["session"])
+        if acc is None:
+            acc = recent_by_session[m["session"]] = {
+                "cost": 0.0,
+                "input": 0,
+                "output": 0,
+                "ts": 0,
+                "model": m["model"],
+                "provider": m["provider"],
+            }
+        acc["cost"] += m["cost"]
+        acc["input"] += m["input"]
+        acc["output"] += m["output"]
+        if m["ts"] > acc["ts"]:
+            acc["ts"] = m["ts"]
+            # The model that served the latest reply is the session's model.
+            if m["model"]:
+                acc["model"] = m["model"]
+            if m["provider"]:
+                acc["provider"] = m["provider"]
+
+    session_meta = {s["id"]: s for s in sessions}
     recent_sorted = sorted(
-        (s for s in sessions if not s["parent_id"]),
-        key=lambda s: s["updated"] or s["created"],
+        recent_by_session.items(),
+        key=lambda kv: kv[1]["ts"],
         reverse=True,
     )[:8]
-    recent = [
-        {
-            "id": s["id"],
-            "title": s["title"][:80],
-            "model": s["model"],
-            "provider": provider_name(s["provider"]),
-            "cost": round(s["cost"], 6),
-            "input": s["input"],
-            "output": s["output"],
-            "updated": s["updated"] or s["created"],
-        }
-        for s in recent_sorted
-    ]
+    recent = []
+    for sid, acc in recent_sorted:
+        meta = session_meta.get(sid) or {}
+        recent.append(
+            {
+                "id": sid,
+                "title": (meta.get("title") or "")[:80],
+                "model": acc["model"],
+                "provider": provider_name(acc["provider"]),
+                "cost": round(acc["cost"], 6),
+                "input": acc["input"],
+                "output": acc["output"],
+                "updated": acc["ts"] or meta.get("updated") or meta.get("created"),
+            }
+        )
 
     return (
         out_windows,

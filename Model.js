@@ -37,20 +37,11 @@ function fmtCost(value) {
   return "$" + fmtInt(n)
 }
 
-// Compact form for the bar: omit cents noise but never show a bare "$0.00"
-// for real spend.
-function fmtCostShort(value) {
-  var n = Number(value)
-  if (!isFinite(n) || n <= 0) return "$0.00"
-  if (n < 0.01) return "<$0.01"
-  if (n < 1000) return "$" + n.toFixed(2)
-  return "$" + fmtInt(n)
-}
-
-function fmtAgo(ms) {
+function fmtAgo(ms, now) {
   var t = Number(ms)
   if (!isFinite(t) || t <= 0) return ""
-  var secs = Math.max(0, (Date.now() - t) / 1000)
+  var base = isFinite(Number(now)) ? Number(now) : Date.now()
+  var secs = Math.max(0, (base - t) / 1000)
   if (secs < 60) return "just now"
   if (secs < 3600) return Math.floor(secs / 60) + "m ago"
   if (secs < 86400) return Math.floor(secs / 3600) + "h ago"
@@ -73,38 +64,4 @@ function pct(part, total) {
   var t = Number(total)
   if (!isFinite(p) || !isFinite(t) || t <= 0) return 0
   return Math.max(0, Math.min(100, (p / t) * 100))
-}
-
-// Percentage width string for the tiny share bars in the provider list.
-function barWidth(part, total, maxPx) {
-  var px = Math.round((pct(part, total) / 100) * Number(maxPx || 100))
-  return Math.max(px, part > 0 ? 2 : 0)
-}
-
-// --- panel-specific helpers ---
-
-function fmtPct(value) {
-  var n = Number(value)
-  if (!isFinite(n)) return "0%"
-  return Math.round(n) + "%"
-}
-
-function fmtDuration(ms) {
-  var s = Math.max(0, Math.round(Number(ms) / 1000))
-  if (s < 60) return s + "s"
-  if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s"
-  var h = Math.floor(s / 3600)
-  var m = Math.floor((s % 3600) / 60)
-  return h + "h " + m + "m"
-}
-
-// Safe property access for QML bindings that might hit undefined
-function get(obj, path, fallback) {
-  var parts = String(path).split(".")
-  var cur = obj
-  for (var i = 0; i < parts.length; i++) {
-    if (cur === null || cur === undefined) return fallback
-    cur = cur[parts[i]]
-  }
-  return cur === undefined ? fallback : cur
 }

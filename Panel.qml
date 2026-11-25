@@ -26,6 +26,16 @@ Panel {
   property var stats: ({})
   property string windowKey: "today"
 
+  // Ticks while the panel is open so relative ages ("just now", "5m ago")
+  // stay truthful instead of freezing at the moment the panel was drawn.
+  property double nowMs: Date.now()
+  Timer {
+    interval: 1000
+    running: root.opened
+    repeat: true
+    onTriggered: root.nowMs = Date.now()
+  }
+
   Component.onCompleted: {
     // Pull stats from the host widget if available
     if (hostWidget && typeof hostWidget.stats !== "undefined") {
@@ -96,8 +106,10 @@ Panel {
     : windowKey === "month" ? "LAST 30 DAYS"
     : "LIFETIME"
 
+  readonly property string hostProblem: (hostWidget && hostWidget.problem) ? String(hostWidget.problem) : ""
+
   readonly property string updatedLabel: hasData
-    ? Model.fmtAgo(stats.generated_at || 0).toUpperCase()
+    ? Model.fmtAgo(stats.generated_at || 0, root.nowMs).toUpperCase()
     : ""
 
   readonly property var providerRows: {
@@ -557,7 +569,7 @@ Panel {
           id: rrowWhen
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
-          text: Model.fmtCost(rrow.rowData.cost) + "  ·  " + Model.fmtAgo(rrow.rowData.updated)
+          text: Model.fmtCost(rrow.rowData.cost) + "  ·  " + Model.fmtAgo(rrow.rowData.updated, root.nowMs)
           textFormat: Text.PlainText
           color: rrow.rowData.cost > 0 ? root.accentColor : root.textDim1
           font.family: root.contentFontFamily
@@ -662,9 +674,11 @@ Panel {
             id: hero
             width: parent.width
             title: "Agent Usage"
-            meta: root.hasData
-              ? root.windowLabel + "  ·  " + root.wSessions + (root.wSessions === 1 ? " SESSION" : " SESSIONS") + "  ·  " + root.updatedLabel
-              : "COLLECTING USAGE"
+            meta: root.hostProblem !== ""
+              ? "COLLECTOR ERROR"
+              : root.hasData
+                ? root.windowLabel + "  ·  " + root.wSessions + (root.wSessions === 1 ? " SESSION" : " SESSIONS") + "  ·  " + root.updatedLabel
+                : "COLLECTING USAGE"
             detail: (root.hasData && root.or.ok === true) ? Model.fmtCost(root.orRemaining) + " left" : ""
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
@@ -712,6 +726,28 @@ Panel {
           }
 
           PanelSeparator { foreground: root.contentForeground }
+
+          // ---- Collector error banner (only when the host reports a problem)
+          BorderSurface {
+            width: parent.width
+            visible: root.hostProblem !== ""
+            radius: root.cardRadius
+            color: Qt.rgba(Commons.Color.urgent.r, Commons.Color.urgent.g, Commons.Color.urgent.b, 0.12)
+            borderSpec: Border.flat(Qt.rgba(Commons.Color.urgent.r, Commons.Color.urgent.g, Commons.Color.urgent.b, 0.45), 1)
+            padding: Style.space(10)
+
+            Text {
+              textFormat: Text.PlainText
+              text: "⚠  " + root.hostProblem
+                + (root.hasData ? "  ·  showing last good data" : "")
+              width: parent.width
+              wrapMode: Text.WordWrap
+              color: Commons.Color.urgent
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+          }
 
           // ---- Window picker + headline figures
           Column {
